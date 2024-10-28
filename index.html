@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบจับเวลาลูกค้า</title>
+    <style>
+        /* สไตล์ทั้งหมดของเว็บแอป */
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        h1 {
+            color: #FF6B3B;
+            margin-bottom: 20px;
+        }
+        .table-container {
+            margin-bottom: 20px;
+            padding: 20px;
+            width: 90%;
+            max-width: 600px;
+            background-color: #fff;
+            box-shadow: 0px 6px 12px rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            border-left: 8px solid #FF6B3B;
+        }
+        .customer-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .customer-row:last-child {
+            border-bottom: none;
+        }
+        .timer {
+            font-weight: bold;
+            color: #FF6B3B;
+        }
+        button {
+            background-color: #FF6B3B;
+            color: white;
+            padding: 6px 12px;
+            margin: 5px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            font-size: 14px;
+        }
+        button:hover {
+            background-color: #e55a30;
+        }
+        .table-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #FF6B3B;
+            margin-bottom: 10px;
+        }
+        .button-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>ระบบจับเวลาลูกค้าแต่ละโต๊ะ</h1>
+    <div id="tables"></div>
+    <button onclick="addTable()">เพิ่มโต๊ะ</button>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-database.js"></script>
+
+    <script>
+        // ตั้งค่า Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyD96uBs06ou4BGF46jUnEBZZQVHJ4TAJ5k",
+            authDomain: "loaddice-80c91.firebaseapp.com",
+            databaseURL: "https://loaddice-80c91-default-rtdb.firebaseio.com",
+            projectId: "loaddice-80c91",
+            storageBucket: "loaddice-80c91.appspot.com",
+            messagingSenderId: "725333231279",
+            appId: "1:725333231279:web:5d0e53cf546b729856765a",
+            measurementId: "G-ZE0CLWS0WY"
+        };
+
+        // Initialize Firebase
+        const app = firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let tableCount = 0;
+        const timers = {};
+
+        // เพิ่มโต๊ะใหม่
+        function addTable() {
+            tableCount++;
+            const tableId = `table-${tableCount}`;
+            const tableContainer = document.createElement("div");
+            tableContainer.className = "table-container";
+            tableContainer.id = tableId;
+
+            tableContainer.innerHTML = `
+                <h2 class="table-title">โต๊ะ ${tableCount}</h2>
+                <div id="customers-${tableId}"></div>
+                <div class="button-group">
+                    <button onclick="addCustomer('${tableId}')">เพิ่มลูกค้า</button>
+                    <button onclick="startAllTimers('${tableId}')">เริ่มเวลาทุกคน</button>
+                    <button onclick="stopAllTimers('${tableId}')">หยุดเวลาทุกคน</button>
+                    <button onclick="resetAllTimers('${tableId}')">รีเซ็ตเวลาทุกคน</button>
+                </div>
+            `;
+
+            document.getElementById("tables").appendChild(tableContainer);
+            timers[tableId] = { customerCount: 0 };
+        }
+
+        // เพิ่มลูกค้าใหม่และจับเวลาใน Firebase
+        function addCustomer(tableId) {
+            timers[tableId].customerCount++;
+            const customerNumber = timers[tableId].customerCount;
+            const customerId = `${tableId}-customer-${customerNumber}`;
+            const customerRow = document.createElement("div");
+            customerRow.className = "customer-row";
+            customerRow.id = customerId;
+
+            customerRow.innerHTML = `
+                <span>Q${customerNumber}</span>
+                <span class="timer" id="timer-${customerId}">00:00:00</span>
+                <button onclick="startTimer('${customerId}', '${tableId}')">เริ่ม</button>
+                <button onclick="stopTimer('${customerId}')">หยุด</button>
+                <button onclick="resetTimer('${customerId}')">รีเซ็ต</button>
+                <button onclick="removeCustomer('${customerId}', '${tableId}')">ลบ</button>
+            `;
+
+            document.getElementById(`customers-${tableId}`).appendChild(customerRow);
+            timers[customerId] = { interval: null, seconds: 0 };
+
+            // บันทึกสถานะของลูกค้าใน Firebase
+            firebase.database().ref(`tables/${tableId}/customers/${customerId}`).set({
+                seconds: 0,
+                active: false
+            });
+        }
+
+        function startTimer(customerId, tableId) {
+            if (timers[customerId].interval) return;
+
+            firebase.database().ref(`tables/${tableId}/customers/${customerId}`).update({ active: true });
+            timers[customerId].interval = setInterval(() => {
+                timers[customerId].seconds++;
+                document.getElementById(`timer-${customerId}`).innerText = formatTime(timers[customerId].seconds);
+
+                // อัปเดตค่าใน Firebase
+                firebase.database().ref(`tables/${tableId}/customers/${customerId}`).update({
+                    seconds: timers[customerId].seconds
+                });
+            }, 1000);
+        }
+
+        function stopTimer(customerId) {
+            clearInterval(timers[customerId].interval);
+            timers[customerId].interval = null;
+            // อัปเดตสถานะหยุดเวลาใน Firebase
+            firebase.database().ref(`tables/${tableId}/customers/${customerId}`).update({ active: false });
+        }
+
+        function resetTimer(customerId) {
+            stopTimer(customerId);
+            timers[customerId].seconds = 0;
+            document.getElementById(`timer-${customerId}`).innerText = "00:00:00";
+
+            // รีเซ็ตเวลาของลูกค้าใน Firebase
+            firebase.database().ref(`tables/${tableId}/customers/${customerId}`).update({
+                seconds: 0
+            });
+        }
+
+        function formatTime(seconds) {
+            const hrs = String(Math.floor(seconds / 3600)).padStart(2, '0');
+            const mins = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
+            const secs = String(seconds % 60).padStart(2, '0');
+            return `${hrs}:${mins}:${secs}`;
+        }
+
+        // เริ่มเวลาทุกคนในโต๊ะที่กำหนด
+    function startAllTimers(tableId) {
+        const customers = document.querySelectorAll(`#customers-${tableId} .customer-row`);
+        customers.forEach((customer) => {
+            const customerId = customer.id;
+            startTimer(customerId, tableId);
+        });
+    }
+
+    // หยุดเวลาทุกคนในโต๊ะที่กำหนด
+    function stopAllTimers(tableId) {
+        const customers = document.querySelectorAll(`#customers-${tableId} .customer-row`);
+        customers.forEach((customer) => {
+            const customerId = customer.id;
+            stopTimer(customerId);
+        });
+    }
+
+    // รีเซ็ตเวลาทุกคนในโต๊ะที่กำหนด
+    function resetAllTimers(tableId) {
+        const customers = document.querySelectorAll(`#customers-${tableId} .customer-row`);
+        customers.forEach((customer) => {
+            const customerId = customer.id;
+            resetTimer(customerId);
+        });
+    }
+
+    // ลบลูกค้าออกจากโต๊ะพร้อมอัปเดต Firebase
+    function removeCustomer(customerId, tableId) {
+        document.getElementById(customerId).remove();
+        clearInterval(timers[customerId].interval);
+        delete timers[customerId];
+
+        // ลบข้อมูลของลูกค้าออกจาก Firebase
+        firebase.database().ref(`tables/${tableId}/customers/${customerId}`).remove();
+    }
+
+    // ดึงข้อมูลสถานะเวลาจาก Firebase เมื่อโหลดหน้าเว็บ
+    function loadData() {
+        firebase.database().ref('tables').once('value').then((snapshot) => {
+            const tables = snapshot.val();
+            if (tables) {
+                Object.keys(tables).forEach((tableId) => {
+                    addTable(); // สร้างโต๊ะ
+
+                    const customers = tables[tableId].customers;
+                    if (customers) {
+                        Object.keys(customers).forEach((customerId) => {
+                            addCustomer(tableId); // เพิ่มลูกค้า
+
+                            const customerData = customers[customerId];
+                            timers[customerId].seconds = customerData.seconds;
+                            document.getElementById(`timer-${customerId}`).innerText = formatTime(customerData.seconds);
+
+                            if (customerData.active) {
+                                startTimer(customerId, tableId);
+                            }
+                        });
+                    }
+                });
+            }
+        });
+    }
+
+    // โหลดข้อมูลเมื่อหน้าเว็บพร้อมใช้งาน
+    window.onload = loadData;
+
+    import { getDatabase, ref, set, update, onValue } from "firebase/database";
+
+    </script>
+</body>
+</html>
